@@ -2,10 +2,8 @@
     "position": "top",
     "margin": 4,
     "modules-left": [
+        "clock",
         "hyprland/workspaces"
-    ],
-    "modules-center": [
-        "clock"
     ],
     "modules-right": [
         "pulseaudio",
