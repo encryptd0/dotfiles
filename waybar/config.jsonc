@@ -15,9 +15,9 @@
         "custom/notification"
     ],
     "clock": {
-        "interval": 60,
-        "format": "{:%H:%M}",
-        "max-length": 25
+    "interval": 1,
+    "format": "{:%H:%M:%S  %a, %d %b}",
+    "max-length": 25
     },
     "hyprland/workspaces": {
         "format": "{name}",
