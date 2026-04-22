@@ -144,6 +144,19 @@ clone_or_update() {
     fi
 }
 
+ensure_modern_gcc() {
+    # hyprutils and Hyprland use C++23 <print>, which needs GCC >= 14.
+    # Noble ships GCC 13 as default; 14 is available in apt.
+    if command -v g++-14 >/dev/null 2>&1; then
+        export CC=gcc-14 CXX=g++-14
+        log "Using g++-14 for hyprwm builds"
+        return
+    fi
+    log "Installing gcc-14/g++-14 (needed for C++23 <print>)"
+    sudo apt-get install -y gcc-14 g++-14
+    export CC=gcc-14 CXX=g++-14
+}
+
 ensure_modern_cmake() {
     # Hyprland 0.50+ needs CMake >= 3.30; Noble ships 3.28.
     local cmake_version
@@ -182,6 +195,8 @@ build_hypr_lib() {
         latest_tag="$(git tag --list 'v*' --sort=-v:refname | head -n1)"
         [[ -n "$latest_tag" ]] && git checkout --quiet "$latest_tag"
         git submodule update --init --recursive --quiet
+        # Nuke cached build dir so a compiler/cmake switch takes effect on re-run.
+        rm -rf build
         cmake -B build -S . -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release
         cmake --build build -j "$(nproc)"
         sudo cmake --install build
@@ -203,6 +218,7 @@ build_hypr_deps() {
         libjxl-dev libheif-dev \
         || true
 
+    ensure_modern_gcc
     ensure_modern_cmake
     build_libinput_from_source
 
@@ -307,6 +323,7 @@ build_xdph_from_source() {
         local latest_tag
         latest_tag="$(git tag --list 'v*' --sort=-v:refname | head -n1)"
         [[ -n "$latest_tag" ]] && git checkout --quiet "$latest_tag"
+        rm -rf build
         cmake -B build -S . -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release
         cmake --build build
         sudo cmake --install build
