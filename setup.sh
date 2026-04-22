@@ -229,6 +229,7 @@ build_hypr_deps() {
     build_hypr_lib "hyprwayland-scanner" ""
     build_hypr_lib "hyprutils"    "hyprutils"
     build_hypr_lib "hyprlang"     "hyprlang"
+    build_hypr_lib "hyprwire"     "hyprwire"
     build_hypr_lib "hyprcursor"   "hyprcursor"
     build_hypr_lib "hyprgraphics" "hyprgraphics"
     build_hypr_lib "aquamarine"   "aquamarine"
