@@ -120,6 +120,10 @@ install_ubuntu_packages() {
     # cmake finds it via pkg-config.
     build_libxcb_errors_from_source
 
+    # Hyprland's own helper libs (hyprutils/hyprlang/etc.) aren't in apt;
+    # build each from the latest release tag.
+    build_hypr_deps
+
     build_hyprland_from_source
     build_xdph_from_source
     build_missing_ubuntu_tools
@@ -138,6 +142,65 @@ clone_or_update() {
     else
         git clone --recursive "$url" "$dir"
     fi
+}
+
+ensure_modern_cmake() {
+    # Hyprland 0.50+ needs CMake >= 3.30; Noble ships 3.28.
+    local cmake_version
+    cmake_version="$(cmake --version 2>/dev/null | awk 'NR==1 {print $3}')"
+    if [[ -n "$cmake_version" ]] && \
+       printf '%s\n%s\n' '3.30' "$cmake_version" | sort -V -C 2>/dev/null; then
+        log "cmake $cmake_version already meets requirement"
+        return
+    fi
+    log "Installing modern cmake from Kitware APT repo"
+    sudo apt-get install -y ca-certificates gpg wget
+    wget -qO - https://apt.kitware.com/keys/kitware-archive-latest.asc \
+        | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/kitware.gpg
+    echo "deb https://apt.kitware.com/ubuntu/ $(lsb_release -cs) main" \
+        | sudo tee /etc/apt/sources.list.d/kitware.list >/dev/null
+    sudo apt-get update -y
+    sudo apt-get install -y cmake
+}
+
+build_hypr_lib() {
+    local repo="$1" pc_name="$2"
+    if [[ -n "$pc_name" ]] && pkg-config --exists "$pc_name" 2>/dev/null; then
+        log "$repo already installed — skipping"
+        return
+    fi
+    if [[ -z "$pc_name" ]] && command -v "$repo" >/dev/null 2>&1; then
+        log "$repo already installed — skipping"
+        return
+    fi
+    log "Building $repo from source"
+    mkdir -p "$SRC_DIR"
+    clone_or_update "https://github.com/hyprwm/$repo" "$SRC_DIR/$repo"
+    (
+        cd "$SRC_DIR/$repo"
+        local latest_tag
+        latest_tag="$(git tag --list 'v*' --sort=-v:refname | head -n1)"
+        [[ -n "$latest_tag" ]] && git checkout --quiet "$latest_tag"
+        git submodule update --init --recursive --quiet
+        cmake -B build -S . -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release
+        cmake --build build -j "$(nproc)"
+        sudo cmake --install build
+    )
+}
+
+build_hypr_deps() {
+    # Extra apt deps that weren't in the first install batch.
+    sudo apt-get install -y libliftoff-dev libdisplay-info-dev uthash-dev || true
+
+    ensure_modern_cmake
+    # Order matters — later deps link against earlier ones.
+    build_hypr_lib "hyprwayland-scanner" ""
+    build_hypr_lib "hyprutils"  "hyprutils"
+    build_hypr_lib "hyprlang"   "hyprlang"
+    build_hypr_lib "hyprcursor" "hyprcursor"
+    build_hypr_lib "hyprgraphics" "hyprgraphics"
+    build_hypr_lib "aquamarine" "aquamarine"
+    sudo ldconfig
 }
 
 build_libxcb_errors_from_source() {
@@ -178,13 +241,8 @@ build_hyprland_from_source() {
             git checkout --quiet "$latest_tag"
             git submodule update --init --recursive --quiet
         fi
-        # hyprutils, hyprlang, hyprcursor, hyprwayland-scanner, aquamarine
-        # aren't in apt on 24.04. asneededdeps clones + installs them.
-        if make -n asneededdeps >/dev/null 2>&1; then
-            sudo make asneededdeps
-        else
-            warn "Hyprland Makefile has no 'asneededdeps' target — build will likely fail if hyprutils/hyprlang/aquamarine aren't present"
-        fi
+        # Deps (hyprutils/hyprlang/hyprcursor/hyprgraphics/aquamarine/
+        # hyprwayland-scanner) were built by build_hypr_deps above.
         make all
         sudo make install
     )
