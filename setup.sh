@@ -229,10 +229,13 @@ build_hypr_deps() {
     build_hypr_lib "hyprwayland-scanner" ""
     build_hypr_lib "hyprutils"    "hyprutils"
     build_hypr_lib "hyprlang"     "hyprlang"
-    build_hypr_lib "hyprwire"     "hyprwire"
     build_hypr_lib "hyprcursor"   "hyprcursor"
     build_hypr_lib "hyprgraphics" "hyprgraphics"
     build_hypr_lib "aquamarine"   "aquamarine"
+    # hyprwire intentionally skipped — uses std::vector::append_range (C++23
+    # libstdc++ feature), which isn't in GCC 14's libstdc++ (Noble's newest).
+    # Hyprland is pinned to v0.52.2 below, the last release before hyprwire
+    # became a required dep.
     sudo ldconfig
 }
 
@@ -358,14 +361,13 @@ build_hyprland_from_source() {
     clone_or_update "https://github.com/hyprwm/Hyprland" "$SRC_DIR/Hyprland"
     (
         cd "$SRC_DIR/Hyprland"
-        # main can be mid-refactor; stick to the latest release tag.
-        local latest_tag
-        latest_tag="$(git tag --list 'v*' --sort=-v:refname | head -n1)"
-        if [[ -n "$latest_tag" ]]; then
-            log "Checking out Hyprland $latest_tag"
-            git checkout --quiet "$latest_tag"
-            git submodule update --init --recursive --quiet
-        fi
+        # Pinned: v0.53.0+ requires hyprwire, which needs C++23
+        # std::vector::append_range from libstdc++-15. Noble only has
+        # libstdc++-14. v0.52.2 is the last release pre-hyprwire.
+        local pinned_tag="v0.52.2"
+        log "Checking out Hyprland $pinned_tag"
+        git checkout --quiet "$pinned_tag"
+        git submodule update --init --recursive --quiet
         # Deps (hyprutils/hyprlang/hyprcursor/hyprgraphics/aquamarine/
         # hyprwayland-scanner) were built by build_hypr_deps above.
         make all
