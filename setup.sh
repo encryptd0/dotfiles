@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
-# Dotfiles setup for Hyprland on Fedora or Ubuntu 24.04 LTS.
-# Detects the distro, installs packages, builds Hyprland when the distro
-# does not ship it, and symlinks every config directory in this repo into
-# ~/.config. Safe to re-run; existing configs are backed up before linking.
+# Fedora-only Hyprland dotfiles setup.
+#
+# - Installs Hyprland + ecosystem from the solopasha/hyprland COPR.
+# - On a MacBook Air A1466 (Broadcom BCM4360 wifi), installs bundled
+#   offline wl-driver RPMs from wifi/rpms/ so wifi works before the
+#   online package install runs. On PCs this step is skipped.
+# - Symlinks each config directory in this repo into ~/.config.
+# Safe to re-run; existing configs are backed up before linking.
 
 set -euo pipefail
 
 DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
 BACKUP_SUFFIX=".bak.$(date +%Y%m%d-%H%M%S)"
+WIFI_RPMS_DIR="$DOTFILES_DIR/wifi/rpms"
 
 # Config directories in this repo that should be symlinked into ~/.config.
 CONFIG_DIRS=(hypr waybar kitty rofi btop nwg-panel nwg-look ristretto)
@@ -24,29 +29,83 @@ require_not_root() {
     fi
 }
 
-detect_distro() {
+require_fedora() {
     if [[ ! -r /etc/os-release ]]; then
         err "/etc/os-release is missing — cannot detect distro."
         exit 1
     fi
     # shellcheck disable=SC1091
     . /etc/os-release
-    case "${ID,,}" in
-        fedora)
-            DISTRO="fedora"
-            ;;
-        ubuntu)
-            DISTRO="ubuntu"
-            if [[ "${VERSION_ID:-}" != "24.04" ]]; then
-                warn "Tested on Ubuntu 24.04 — found ${VERSION_ID:-unknown}. Continuing anyway."
-            fi
-            ;;
-        *)
-            err "Unsupported distro: ${ID:-unknown}. This script supports Fedora and Ubuntu only."
+    if [[ "${ID,,}" != "fedora" ]]; then
+        err "Unsupported distro: ${ID:-unknown}. This script is Fedora-only."
+        exit 1
+    fi
+    log "Detected Fedora ${VERSION_ID:-unknown}"
+}
+
+# ---------------------------------------------------------------------------
+# Broadcom BCM4360 wifi (MacBook Air A1466)
+# ---------------------------------------------------------------------------
+
+has_broadcom_bcm43() {
+    command -v lspci >/dev/null 2>&1 || return 1
+    lspci -d '14e4:*' 2>/dev/null | grep -qE 'BCM43(60|42)'
+}
+
+wl_loaded() {
+    lsmod 2>/dev/null | grep -q '^wl '
+}
+
+has_network() {
+    ip route show default 2>/dev/null | grep -q . || return 1
+    getent hosts mirrors.fedoraproject.org >/dev/null 2>&1
+}
+
+enable_rpmfusion() {
+    if ! rpm -q rpmfusion-free-release >/dev/null 2>&1; then
+        sudo dnf install -y \
+            "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm"
+    fi
+    if ! rpm -q rpmfusion-nonfree-release >/dev/null 2>&1; then
+        sudo dnf install -y \
+            "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm"
+    fi
+}
+
+install_broadcom_wifi() {
+    if ! has_broadcom_bcm43; then
+        log "Broadcom BCM43xx wifi not detected — skipping wl driver install"
+        return
+    fi
+    if wl_loaded; then
+        log "wl kernel module already loaded — skipping"
+        return
+    fi
+
+    if has_network; then
+        log "Broadcom BCM43xx detected and online — installing wl driver via dnf"
+        enable_rpmfusion
+        sudo dnf install -y akmod-wl broadcom-wl
+    else
+        if [[ ! -d "$WIFI_RPMS_DIR" ]] || ! compgen -G "$WIFI_RPMS_DIR/*.rpm" >/dev/null; then
+            err "Broadcom BCM43xx detected and no network, but no RPMs at $WIFI_RPMS_DIR"
+            err "Run wifi/download-drivers.sh on a Fedora machine with internet, commit the result, then re-run."
             exit 1
-            ;;
-    esac
-    log "Detected distro: $DISTRO"
+        fi
+        log "Installing bundled Broadcom wl driver RPMs (offline)"
+        sudo dnf install -y --disablerepo='*' "$WIFI_RPMS_DIR"/*.rpm
+    fi
+
+    log "Building wl kernel module for running kernel (akmods)"
+    sudo akmods --force || warn "akmods build failed — see /var/cache/akmods for logs"
+
+    log "Loading wl kernel module"
+    if sudo modprobe wl; then
+        log "wl loaded — you can now connect to wifi"
+    else
+        warn "modprobe wl failed. Reboot, connect to wifi via GNOME/nmcli, then re-run ./setup.sh to continue."
+        exit 0
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -54,9 +113,12 @@ detect_distro() {
 # ---------------------------------------------------------------------------
 
 install_fedora_packages() {
-    log "Enabling RPM Fusion (free) and the solopasha/hyprland COPR"
-    sudo dnf install -y \
-        "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" || true
+    if ! has_network; then
+        err "No network connectivity. Connect to the internet and re-run ./setup.sh."
+        exit 1
+    fi
+
+    enable_rpmfusion
     sudo dnf install -y dnf-plugins-core
     sudo dnf copr enable -y solopasha/hyprland
 
@@ -67,8 +129,7 @@ install_fedora_packages() {
         swww swaync \
         nwg-panel nwg-look \
         dolphin ristretto \
-        pipewire wireplumber pipewire-pulseaudio \
-        pavucontrol \
+        pipewire wireplumber pipewire-pulseaudio pavucontrol \
         brightnessctl playerctl \
         polkit-gnome network-manager-applet \
         grim slurp wl-clipboard cliphist \
@@ -77,367 +138,8 @@ install_fedora_packages() {
         qt5-qtwayland qt6-qtwayland
 }
 
-install_ubuntu_packages() {
-    log "Ensuring 'universe' repo is enabled"
-    # libxcb-errors-dev, libtomlplusplus-dev, and several waybar/rofi deps
-    # live in universe. Desktop images enable it by default; minimal/cloud
-    # images don't.
-    sudo apt-get update -y
-    sudo apt-get install -y software-properties-common
-    sudo add-apt-repository -y universe
-    sudo apt-get update -y
-
-    log "Installing base packages via apt"
-    # Everything available in Noble (24.04) main/universe. Hyprland itself is
-    # NOT here — we build it from source below.
-    sudo apt-get install -y \
-        build-essential cmake meson ninja-build pkg-config \
-        git curl wget unzip ca-certificates \
-        waybar kitty rofi btop \
-        dolphin ristretto \
-        pipewire wireplumber pipewire-pulse \
-        pavucontrol \
-        brightnessctl playerctl \
-        policykit-1-gnome network-manager-gnome \
-        grim slurp wl-clipboard \
-        zsh \
-        fonts-jetbrains-mono fonts-noto-color-emoji \
-        qtwayland5 qt6-wayland
-
-    # Hyprland runtime/build deps on 24.04.
-    log "Installing Hyprland build dependencies"
-    sudo apt-get install -y \
-        libwayland-dev wayland-protocols libxkbcommon-dev libinput-dev \
-        libudev-dev libseat-dev libdrm-dev libgbm-dev libgl1-mesa-dev \
-        libegl-dev libpixman-1-dev libcairo2-dev libpango1.0-dev \
-        libjpeg-dev libwebp-dev libmagic-dev libgirepository1.0-dev \
-        libtomlplusplus-dev libzip-dev librsvg2-dev libre2-dev \
-        libxcb1-dev libxcb-composite0-dev libxcb-ewmh-dev libxcb-icccm4-dev \
-        libxcb-res0-dev libxcb-xinput-dev \
-        hwdata glslang-tools
-
-    # libxcb-errors isn't packaged on Noble; build it first so Hyprland's
-    # cmake finds it via pkg-config.
-    build_libxcb_errors_from_source
-
-    # Hyprland's own helper libs (hyprutils/hyprlang/etc.) aren't in apt;
-    # build each from the latest release tag.
-    build_hypr_deps
-
-    build_hyprland_from_source
-    build_xdph_from_source
-    build_missing_ubuntu_tools
-}
-
 # ---------------------------------------------------------------------------
-# Ubuntu: build Hyprland + companions from source
-# ---------------------------------------------------------------------------
-
-SRC_DIR="$HOME/.local/src"
-
-clone_or_update() {
-    local url="$1" dir="$2"
-    if [[ -d "$dir/.git" ]]; then
-        git -C "$dir" fetch --tags --quiet
-    else
-        git clone --recursive "$url" "$dir"
-    fi
-}
-
-ensure_modern_gcc() {
-    # hyprutils and Hyprland use C++23 <print>, which needs GCC >= 14.
-    # Noble ships GCC 13 as default; 14 is available in apt.
-    if command -v g++-14 >/dev/null 2>&1; then
-        export CC=gcc-14 CXX=g++-14
-        log "Using g++-14 for hyprwm builds"
-        return
-    fi
-    log "Installing gcc-14/g++-14 (needed for C++23 <print>)"
-    sudo apt-get install -y gcc-14 g++-14
-    export CC=gcc-14 CXX=g++-14
-}
-
-ensure_modern_cmake() {
-    # Hyprland 0.50+ needs CMake >= 3.30; Noble ships 3.28.
-    local cmake_version
-    cmake_version="$(cmake --version 2>/dev/null | awk 'NR==1 {print $3}')"
-    if [[ -n "$cmake_version" ]] && \
-       printf '%s\n%s\n' '3.30' "$cmake_version" | sort -V -C 2>/dev/null; then
-        log "cmake $cmake_version already meets requirement"
-        return
-    fi
-    log "Installing modern cmake from Kitware APT repo"
-    sudo apt-get install -y ca-certificates gpg wget
-    wget -qO - https://apt.kitware.com/keys/kitware-archive-latest.asc \
-        | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/kitware.gpg
-    echo "deb https://apt.kitware.com/ubuntu/ $(lsb_release -cs) main" \
-        | sudo tee /etc/apt/sources.list.d/kitware.list >/dev/null
-    sudo apt-get update -y
-    sudo apt-get install -y cmake
-}
-
-build_hypr_lib() {
-    local repo="$1" pc_name="$2"
-    if [[ -n "$pc_name" ]] && pkg-config --exists "$pc_name" 2>/dev/null; then
-        log "$repo already installed — skipping"
-        return
-    fi
-    if [[ -z "$pc_name" ]] && command -v "$repo" >/dev/null 2>&1; then
-        log "$repo already installed — skipping"
-        return
-    fi
-    log "Building $repo from source"
-    mkdir -p "$SRC_DIR"
-    clone_or_update "https://github.com/hyprwm/$repo" "$SRC_DIR/$repo"
-    (
-        cd "$SRC_DIR/$repo"
-        local latest_tag
-        latest_tag="$(git tag --list 'v*' --sort=-v:refname | head -n1)"
-        [[ -n "$latest_tag" ]] && git checkout --quiet "$latest_tag"
-        git submodule update --init --recursive --quiet
-        # Nuke cached build dir so a compiler/cmake switch takes effect on re-run.
-        rm -rf build
-        cmake -B build -S . -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release
-        cmake --build build -j "$(nproc)"
-        sudo cmake --install build
-    )
-}
-
-build_hypr_deps() {
-    # Full pkg-config dep list, extracted from each hyprwm/* CMakeLists.txt.
-    # Everything Noble has; libinput is built below because Noble is 1.25
-    # but aquamarine needs >= 1.26.
-    log "Installing Hyprland library pkg-config deps"
-    sudo apt-get install -y \
-        libpugixml-dev \
-        libliftoff-dev libdisplay-info-dev libseat-dev \
-        uthash-dev \
-        libmuparser-dev liblcms2-dev \
-        libxcursor-dev uuid-dev libglib2.0-dev \
-        libxcb-render0-dev libxcb-xfixes0-dev \
-        libjxl-dev libheif-dev \
-        || true
-
-    ensure_modern_gcc
-    ensure_modern_cmake
-    # wayland/xkbcommon first — hyprwayland-scanner & aquamarine link against them.
-    build_wayland_from_source
-    build_xkbcommon_from_source
-    build_libinput_from_source
-
-    # Order matters — later deps link against earlier ones.
-    build_hypr_lib "hyprwayland-scanner" ""
-    build_hypr_lib "hyprutils"    "hyprutils"
-    build_hypr_lib "hyprlang"     "hyprlang"
-    build_hypr_lib "hyprcursor"   "hyprcursor"
-    build_hypr_lib "hyprgraphics" "hyprgraphics"
-    build_hypr_lib "aquamarine"   "aquamarine"
-    # hyprwire intentionally skipped — uses std::vector::append_range (C++23
-    # libstdc++ feature), which isn't in GCC 14's libstdc++ (Noble's newest).
-    # Hyprland is pinned to v0.52.2 below, the last release before hyprwire
-    # became a required dep.
-    sudo ldconfig
-}
-
-_multiarch() {
-    dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || echo x86_64-linux-gnu
-}
-
-# $1 = installed version string, $2 = required version string
-# returns 0 iff installed >= required
-_version_ge() {
-    [[ -n "$1" ]] || return 1
-    printf '%s\n%s\n' "$2" "$1" | sort -V -C 2>/dev/null
-}
-
-build_libinput_from_source() {
-    local current
-    current="$(pkg-config --modversion libinput 2>/dev/null || echo 0)"
-    if _version_ge "$current" "1.28"; then
-        log "libinput $current already meets >= 1.28 requirement"
-        return
-    fi
-    log "Building libinput from source (Noble ships 1.25, installed=$current, Hyprland needs >= 1.28)"
-    sudo apt-get install -y \
-        libevdev-dev libmtdev-dev libwacom-dev libgudev-1.0-dev check
-    mkdir -p "$SRC_DIR"
-    clone_or_update "https://gitlab.freedesktop.org/libinput/libinput.git" \
-        "$SRC_DIR/libinput"
-    (
-        cd "$SRC_DIR/libinput"
-        # Latest stable 1.x — libinput hasn't cut 2.x yet.
-        local tag
-        tag="$(git tag --list '1.*' --sort=-v:refname | head -n1)"
-        [[ -n "$tag" ]] && git checkout --quiet "$tag"
-        rm -rf build
-        meson setup --prefix=/usr --libdir="lib/$(_multiarch)" \
-            -Dtests=false -Ddebug-gui=false -Ddocumentation=false build
-        ninja -C build
-        sudo ninja -C build install
-        sudo ldconfig
-    )
-}
-
-build_wayland_from_source() {
-    local current
-    current="$(pkg-config --modversion wayland-server 2>/dev/null || echo 0)"
-    if _version_ge "$current" "1.22.91"; then
-        log "wayland-server $current already meets >= 1.22.91 requirement"
-        return
-    fi
-    log "Building wayland from source (Noble ships $current, Hyprland needs >= 1.22.91)"
-    sudo apt-get install -y libexpat1-dev libffi-dev libxml2-dev
-    mkdir -p "$SRC_DIR"
-    clone_or_update "https://gitlab.freedesktop.org/wayland/wayland.git" \
-        "$SRC_DIR/wayland"
-    (
-        cd "$SRC_DIR/wayland"
-        local tag
-        tag="$(git tag --list '1.*' --sort=-v:refname | head -n1)"
-        [[ -n "$tag" ]] && git checkout --quiet "$tag"
-        rm -rf build
-        meson setup --prefix=/usr --libdir="lib/$(_multiarch)" \
-            -Ddocumentation=false -Dtests=false build
-        ninja -C build
-        sudo ninja -C build install
-        sudo ldconfig
-    )
-}
-
-build_xkbcommon_from_source() {
-    local current
-    current="$(pkg-config --modversion xkbcommon 2>/dev/null || echo 0)"
-    if _version_ge "$current" "1.11"; then
-        log "xkbcommon $current already meets >= 1.11 requirement"
-        return
-    fi
-    log "Building libxkbcommon from source (Noble ships $current, Hyprland needs >= 1.11)"
-    sudo apt-get install -y bison libxml2-dev xkb-data libxcb-xkb-dev
-    mkdir -p "$SRC_DIR"
-    clone_or_update "https://github.com/xkbcommon/libxkbcommon.git" \
-        "$SRC_DIR/libxkbcommon"
-    (
-        cd "$SRC_DIR/libxkbcommon"
-        local tag
-        tag="$(git tag --list 'xkbcommon-*' --sort=-v:refname | head -n1)"
-        [[ -z "$tag" ]] && tag="$(git tag --list 'v*' --sort=-v:refname | head -n1)"
-        [[ -n "$tag" ]] && git checkout --quiet "$tag"
-        rm -rf build
-        meson setup --prefix=/usr --libdir="lib/$(_multiarch)" \
-            -Denable-docs=false -Denable-wayland=true -Denable-x11=true build
-        ninja -C build
-        sudo ninja -C build install
-        sudo ldconfig
-    )
-}
-
-build_libxcb_errors_from_source() {
-    if pkg-config --exists xcb-errors 2>/dev/null; then
-        log "libxcb-errors already installed — skipping"
-        return
-    fi
-    log "Building libxcb-errors from source (not packaged on Noble)"
-    sudo apt-get install -y autoconf automake libtool xutils-dev xcb-proto python3
-    mkdir -p "$SRC_DIR"
-    clone_or_update "https://gitlab.freedesktop.org/xorg/lib/libxcb-errors.git" \
-        "$SRC_DIR/libxcb-errors"
-    (
-        cd "$SRC_DIR/libxcb-errors"
-        git submodule update --init --recursive
-        ./autogen.sh --prefix=/usr
-        make
-        sudo make install
-        sudo ldconfig
-    )
-}
-
-build_hyprland_from_source() {
-    if command -v Hyprland >/dev/null 2>&1; then
-        log "Hyprland already installed — skipping source build"
-        return
-    fi
-    mkdir -p "$SRC_DIR"
-    log "Cloning and building Hyprland (this takes a while)"
-    clone_or_update "https://github.com/hyprwm/Hyprland" "$SRC_DIR/Hyprland"
-    (
-        cd "$SRC_DIR/Hyprland"
-        # Pinned: v0.53.0+ requires hyprwire, which needs C++23
-        # std::vector::append_range from libstdc++-15. Noble only has
-        # libstdc++-14. v0.52.2 is the last release pre-hyprwire.
-        local pinned_tag="v0.52.2"
-        log "Checking out Hyprland $pinned_tag"
-        git checkout --quiet "$pinned_tag"
-        git submodule update --init --recursive --quiet
-        # Deps (hyprutils/hyprlang/hyprcursor/hyprgraphics/aquamarine/
-        # hyprwayland-scanner) were built by build_hypr_deps above.
-        make all
-        sudo make install
-    )
-}
-
-build_xdph_from_source() {
-    if command -v xdg-desktop-portal-hyprland >/dev/null 2>&1; then return; fi
-    log "Building xdg-desktop-portal-hyprland from source"
-    sudo apt-get install -y libpipewire-0.3-dev libsdbus-c++-dev \
-        qt6-base-dev qt6-wayland-dev || true
-    clone_or_update "https://github.com/hyprwm/xdg-desktop-portal-hyprland" \
-        "$SRC_DIR/xdg-desktop-portal-hyprland"
-    (
-        cd "$SRC_DIR/xdg-desktop-portal-hyprland"
-        local latest_tag
-        latest_tag="$(git tag --list 'v*' --sort=-v:refname | head -n1)"
-        [[ -n "$latest_tag" ]] && git checkout --quiet "$latest_tag"
-        rm -rf build
-        cmake -B build -S . -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release
-        cmake --build build
-        sudo cmake --install build
-    )
-}
-
-build_missing_ubuntu_tools() {
-    # swww — wallpaper daemon (written in Rust)
-    if ! command -v swww >/dev/null 2>&1; then
-        ensure_cargo
-        log "Building swww via cargo"
-        cargo install --locked swww
-    fi
-
-    # swaync — notification daemon
-    if ! command -v swaync >/dev/null 2>&1; then
-        log "Building swaync from source"
-        sudo apt-get install -y libgtk-3-dev libgtk-layer-shell-dev \
-            libgee-0.8-dev libjson-glib-dev libgranite-dev scdoc valac || true
-        clone_or_update "https://github.com/ErikReider/SwayNotificationCenter" \
-            "$SRC_DIR/SwayNotificationCenter"
-        (
-            cd "$SRC_DIR/SwayNotificationCenter"
-            meson setup --prefix=/usr build --reconfigure
-            ninja -C build
-            sudo ninja -C build install
-        )
-    fi
-
-    # nwg-panel + nwg-look via pipx (pure python where possible)
-    if ! command -v nwg-panel >/dev/null 2>&1; then
-        sudo apt-get install -y pipx python3-gi gir1.2-gtk-3.0
-        pipx ensurepath
-        pipx install nwg-panel || warn "nwg-panel install failed — install manually if you need it"
-    fi
-    if ! command -v nwg-look >/dev/null 2>&1; then
-        warn "nwg-look is not packaged for Ubuntu 24.04; install from https://github.com/nwg-piotr/nwg-look if you need it"
-    fi
-}
-
-ensure_cargo() {
-    if command -v cargo >/dev/null 2>&1; then return; fi
-    log "Installing rustup toolchain (needed for cargo builds)"
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-    # shellcheck disable=SC1091
-    . "$HOME/.cargo/env"
-}
-
-# ---------------------------------------------------------------------------
-# Shell + fonts (cross-distro)
+# Shell + fonts
 # ---------------------------------------------------------------------------
 
 install_oh_my_zsh() {
@@ -515,13 +217,9 @@ link_configs() {
 
 main() {
     require_not_root
-    detect_distro
-
-    case "$DISTRO" in
-        fedora) install_fedora_packages ;;
-        ubuntu) install_ubuntu_packages ;;
-    esac
-
+    require_fedora
+    install_broadcom_wifi
+    install_fedora_packages
     install_oh_my_zsh
     install_nerd_font
     link_configs

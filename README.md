@@ -1,4 +1,4 @@
-# My Minimalist Hyprland setup (Fedora / Ubuntu 24.04)
+# My Minimalist Hyprland setup (Fedora)
 
 ## Apps & Tools I Use
 
@@ -8,20 +8,13 @@
 | 📊 Status Bar | Waybar |
 | 🚀 App Launcher | Rofi |
 | 🖼️ Image Viewer | Ristretto |
-| 🐧 Linux Distro | Fedora or Ubuntu 24.04 LTS |
+| 🐧 Linux Distro | Fedora Workstation |
 | 🐚 Shell | Zsh |
 | 🎨 Shell Framework | Oh My Zsh |
 | ✨ Prompt Theme | Powerlevel10k |
 | 🔤 Font | JetBrains Mono (Nerd Fonts) |
 
 ## Install
-
-Clone and run the setup script. It detects the distro, installs every
-package it needs, builds Hyprland from source on Ubuntu (24.04 doesn't
-ship it), and symlinks each config directory in this repo into
-`~/.config/`. Pre-existing configs are backed up to
-`~/.config/<name>.bak.<timestamp>` before any link is created, so rerunning
-the script is safe.
 
 ```sh
 git clone <this-repo> ~/Documents/dotfiles
@@ -31,24 +24,41 @@ cd ~/Documents/dotfiles
 
 What it does:
 
-- **Fedora**: enables RPM Fusion + the `solopasha/hyprland` COPR, then
-  installs Hyprland, Waybar, Kitty, Rofi (Wayland), btop, swww, swaync,
-  nwg-panel, nwg-look, and the rest via `dnf`.
-- **Ubuntu 24.04**: installs what `apt` has (Waybar, Kitty, Rofi, btop,
-  PipeWire, etc.) and builds Hyprland, swww, and swaync from source into
-  `~/.local/src/`. `nwg-panel` is installed via `pipx`; `nwg-look` is
-  skipped (no upstream package for Noble) with a pointer to build it
-  manually if you need it.
-- Installs Oh My Zsh + Powerlevel10k and the JetBrains Mono Nerd Font if
-  they're missing, and sets zsh as the default shell.
+- Verifies you're on Fedora (bails if not).
+- Detects Broadcom BCM43xx wifi. On a MacBook Air A1466, installs the
+  bundled offline `wl` driver RPMs from `wifi/rpms/` so wifi works
+  before the online package install runs. On a PC, this step is
+  skipped automatically.
+- Enables RPM Fusion (free + nonfree) and the `solopasha/hyprland` COPR.
+- Installs Hyprland, Waybar, Kitty, Rofi (Wayland), btop, swww, swaync,
+  nwg-panel, nwg-look, PipeWire, pavucontrol, and the rest via `dnf`.
+- Installs Oh My Zsh + Powerlevel10k, sets zsh as the default shell.
+- Installs the JetBrains Mono Nerd Font if missing.
 - Symlinks `hypr/`, `waybar/`, `kitty/`, `rofi/`, `btop/`, `nwg-panel/`,
-  `nwg-look/`, and `ristretto/` into `~/.config/`.
+  `nwg-look/`, and `ristretto/` into `~/.config/`. Pre-existing configs
+  are backed up to `~/.config/<name>.bak.<timestamp>` before linking,
+  so rerunning is safe.
 
 After it finishes, log out and pick **Hyprland** from the display
 manager's session list.
+
+## MacBook Air A1466 offline wifi
+
+First install on the MacBook:
+
+1. Install Fedora Workstation from USB.
+2. Without connecting to wifi, copy this repo onto the machine (USB
+   stick is easiest).
+3. Run `./setup.sh`. It detects the Broadcom chip, installs the
+   bundled driver RPMs offline, rebuilds the kmod against the running
+   kernel, and `modprobe wl`.
+4. If `modprobe wl` fails, reboot, connect to wifi via GNOME, then run
+   `./setup.sh` again to continue with the package install.
+
+To refresh the bundled drivers (e.g. new Fedora release), see
+[`wifi/README.md`](wifi/README.md).
 
 ## Screenshots
 ![Project Screenshot](images/screenshot_1768586722.png)
 
 ![Project Screenshot](images/screenshot_1768586769.png)
----
