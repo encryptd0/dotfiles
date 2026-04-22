@@ -189,18 +189,65 @@ build_hypr_lib() {
 }
 
 build_hypr_deps() {
-    # Extra apt deps that weren't in the first install batch.
-    sudo apt-get install -y libliftoff-dev libdisplay-info-dev uthash-dev || true
+    # Full pkg-config dep list, extracted from each hyprwm/* CMakeLists.txt.
+    # Everything Noble has; libinput is built below because Noble is 1.25
+    # but aquamarine needs >= 1.26.
+    log "Installing Hyprland library pkg-config deps"
+    sudo apt-get install -y \
+        libpugixml-dev \
+        libliftoff-dev libdisplay-info-dev libseat-dev \
+        uthash-dev \
+        libmuparser-dev liblcms2-dev \
+        libxcursor-dev uuid-dev libglib2.0-dev \
+        libxcb-render0-dev libxcb-xfixes0-dev \
+        libjxl-dev libheif-dev \
+        || true
 
     ensure_modern_cmake
+    build_libinput_from_source
+
     # Order matters — later deps link against earlier ones.
     build_hypr_lib "hyprwayland-scanner" ""
-    build_hypr_lib "hyprutils"  "hyprutils"
-    build_hypr_lib "hyprlang"   "hyprlang"
-    build_hypr_lib "hyprcursor" "hyprcursor"
+    build_hypr_lib "hyprutils"    "hyprutils"
+    build_hypr_lib "hyprlang"     "hyprlang"
+    build_hypr_lib "hyprcursor"   "hyprcursor"
     build_hypr_lib "hyprgraphics" "hyprgraphics"
-    build_hypr_lib "aquamarine" "aquamarine"
+    build_hypr_lib "aquamarine"   "aquamarine"
     sudo ldconfig
+}
+
+build_libinput_from_source() {
+    local current
+    current="$(pkg-config --modversion libinput 2>/dev/null || echo 0)"
+    if printf '%s\n%s\n' '1.26' "$current" | sort -V -C 2>/dev/null; then
+        log "libinput $current already meets >= 1.26 requirement"
+        return
+    fi
+    log "Building libinput from source (Noble ships $current, aquamarine needs >= 1.26)"
+    sudo apt-get install -y \
+        libevdev-dev libmtdev-dev libwacom-dev libgudev-1.0-dev check
+    local multiarch
+    multiarch="$(dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || echo x86_64-linux-gnu)"
+    mkdir -p "$SRC_DIR"
+    clone_or_update "https://gitlab.freedesktop.org/libinput/libinput.git" \
+        "$SRC_DIR/libinput"
+    (
+        cd "$SRC_DIR/libinput"
+        # Pin to the latest 1.26.x release so we don't drift onto a branch
+        # that needs even newer deps than Noble can offer.
+        local tag
+        tag="$(git tag --list '1.26.*' --sort=-v:refname | head -n1)"
+        [[ -z "$tag" ]] && tag="$(git tag --list '1.*' --sort=-v:refname | head -n1)"
+        [[ -n "$tag" ]] && git checkout --quiet "$tag"
+        rm -rf build
+        # libdir matches apt's multiarch layout so we overwrite cleanly
+        # rather than creating a parallel copy under /usr/lib.
+        meson setup --prefix=/usr --libdir="lib/$multiarch" \
+            -Dtests=false -Ddebug-gui=false -Ddocumentation=false build
+        ninja -C build
+        sudo ninja -C build install
+        sudo ldconfig
+    )
 }
 
 build_libxcb_errors_from_source() {
