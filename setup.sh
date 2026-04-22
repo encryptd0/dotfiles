@@ -220,6 +220,9 @@ build_hypr_deps() {
 
     ensure_modern_gcc
     ensure_modern_cmake
+    # wayland/xkbcommon first — hyprwayland-scanner & aquamarine link against them.
+    build_wayland_from_source
+    build_xkbcommon_from_source
     build_libinput_from_source
 
     # Order matters — later deps link against earlier ones.
@@ -232,34 +235,92 @@ build_hypr_deps() {
     sudo ldconfig
 }
 
+_multiarch() {
+    dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || echo x86_64-linux-gnu
+}
+
+# $1 = installed version string, $2 = required version string
+# returns 0 iff installed >= required
+_version_ge() {
+    [[ -n "$1" ]] || return 1
+    printf '%s\n%s\n' "$2" "$1" | sort -V -C 2>/dev/null
+}
+
 build_libinput_from_source() {
     local current
     current="$(pkg-config --modversion libinput 2>/dev/null || echo 0)"
-    if printf '%s\n%s\n' '1.26' "$current" | sort -V -C 2>/dev/null; then
-        log "libinput $current already meets >= 1.26 requirement"
+    if _version_ge "$current" "1.28"; then
+        log "libinput $current already meets >= 1.28 requirement"
         return
     fi
-    log "Building libinput from source (Noble ships $current, aquamarine needs >= 1.26)"
+    log "Building libinput from source (Noble ships 1.25, installed=$current, Hyprland needs >= 1.28)"
     sudo apt-get install -y \
         libevdev-dev libmtdev-dev libwacom-dev libgudev-1.0-dev check
-    local multiarch
-    multiarch="$(dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || echo x86_64-linux-gnu)"
     mkdir -p "$SRC_DIR"
     clone_or_update "https://gitlab.freedesktop.org/libinput/libinput.git" \
         "$SRC_DIR/libinput"
     (
         cd "$SRC_DIR/libinput"
-        # Pin to the latest 1.26.x release so we don't drift onto a branch
-        # that needs even newer deps than Noble can offer.
+        # Latest stable 1.x — libinput hasn't cut 2.x yet.
         local tag
-        tag="$(git tag --list '1.26.*' --sort=-v:refname | head -n1)"
-        [[ -z "$tag" ]] && tag="$(git tag --list '1.*' --sort=-v:refname | head -n1)"
+        tag="$(git tag --list '1.*' --sort=-v:refname | head -n1)"
         [[ -n "$tag" ]] && git checkout --quiet "$tag"
         rm -rf build
-        # libdir matches apt's multiarch layout so we overwrite cleanly
-        # rather than creating a parallel copy under /usr/lib.
-        meson setup --prefix=/usr --libdir="lib/$multiarch" \
+        meson setup --prefix=/usr --libdir="lib/$(_multiarch)" \
             -Dtests=false -Ddebug-gui=false -Ddocumentation=false build
+        ninja -C build
+        sudo ninja -C build install
+        sudo ldconfig
+    )
+}
+
+build_wayland_from_source() {
+    local current
+    current="$(pkg-config --modversion wayland-server 2>/dev/null || echo 0)"
+    if _version_ge "$current" "1.22.91"; then
+        log "wayland-server $current already meets >= 1.22.91 requirement"
+        return
+    fi
+    log "Building wayland from source (Noble ships $current, Hyprland needs >= 1.22.91)"
+    sudo apt-get install -y libexpat1-dev libffi-dev libxml2-dev
+    mkdir -p "$SRC_DIR"
+    clone_or_update "https://gitlab.freedesktop.org/wayland/wayland.git" \
+        "$SRC_DIR/wayland"
+    (
+        cd "$SRC_DIR/wayland"
+        local tag
+        tag="$(git tag --list '1.*' --sort=-v:refname | head -n1)"
+        [[ -n "$tag" ]] && git checkout --quiet "$tag"
+        rm -rf build
+        meson setup --prefix=/usr --libdir="lib/$(_multiarch)" \
+            -Ddocumentation=false -Dtests=false build
+        ninja -C build
+        sudo ninja -C build install
+        sudo ldconfig
+    )
+}
+
+build_xkbcommon_from_source() {
+    local current
+    current="$(pkg-config --modversion xkbcommon 2>/dev/null || echo 0)"
+    if _version_ge "$current" "1.11"; then
+        log "xkbcommon $current already meets >= 1.11 requirement"
+        return
+    fi
+    log "Building libxkbcommon from source (Noble ships $current, Hyprland needs >= 1.11)"
+    sudo apt-get install -y bison libxml2-dev xkb-data libxcb-xkb-dev
+    mkdir -p "$SRC_DIR"
+    clone_or_update "https://github.com/xkbcommon/libxkbcommon.git" \
+        "$SRC_DIR/libxkbcommon"
+    (
+        cd "$SRC_DIR/libxkbcommon"
+        local tag
+        tag="$(git tag --list 'xkbcommon-*' --sort=-v:refname | head -n1)"
+        [[ -z "$tag" ]] && tag="$(git tag --list 'v*' --sort=-v:refname | head -n1)"
+        [[ -n "$tag" ]] && git checkout --quiet "$tag"
+        rm -rf build
+        meson setup --prefix=/usr --libdir="lib/$(_multiarch)" \
+            -Denable-docs=false -Denable-wayland=true -Denable-x11=true build
         ninja -C build
         sudo ninja -C build install
         sudo ldconfig
