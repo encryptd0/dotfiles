@@ -57,7 +57,6 @@
         ]
     },
     "network": {
-        "interface": "wlp4s0",
         "format": "{ifname}",
         "format-wifi": " {ipaddr}",
         "format-ethernet": "󰊗 {ipaddr}/{cidr}",
@@ -67,7 +66,7 @@
         "tooltip-format-ethernet": " {ifname}",
         "tooltip-format-disconnected": "Disconnected",
         "max-length": 50,
-        "on-click": "connex"
+        "on-click": "nm-connection-editor"
     },
     "custom/notification": {
         "tooltip": true,

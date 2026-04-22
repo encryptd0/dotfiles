@@ -9,8 +9,6 @@ set -euo pipefail
 DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
 BACKUP_SUFFIX=".bak.$(date +%Y%m%d-%H%M%S)"
-STAMP_DIR="$HOME/.cache/dotfiles-setup"
-mkdir -p "$STAMP_DIR"
 
 # Config directories in this repo that should be symlinked into ~/.config.
 CONFIG_DIRS=(hypr waybar kitty rofi btop nwg-panel nwg-look ristretto)
@@ -70,6 +68,7 @@ install_fedora_packages() {
         nwg-panel nwg-look \
         dolphin ristretto \
         pipewire wireplumber pipewire-pulseaudio \
+        pavucontrol \
         brightnessctl playerctl \
         polkit-gnome network-manager-applet \
         grim slurp wl-clipboard cliphist \
@@ -79,7 +78,13 @@ install_fedora_packages() {
 }
 
 install_ubuntu_packages() {
-    log "Updating apt cache"
+    log "Ensuring 'universe' repo is enabled"
+    # libxcb-errors-dev, libtomlplusplus-dev, and several waybar/rofi deps
+    # live in universe. Desktop images enable it by default; minimal/cloud
+    # images don't.
+    sudo apt-get update -y
+    sudo apt-get install -y software-properties-common
+    sudo add-apt-repository -y universe
     sudo apt-get update -y
 
     log "Installing base packages via apt"
@@ -91,6 +96,7 @@ install_ubuntu_packages() {
         waybar kitty rofi btop \
         dolphin ristretto \
         pipewire wireplumber pipewire-pulse \
+        pavucontrol \
         brightnessctl playerctl \
         policykit-1-gnome network-manager-gnome \
         grim slurp wl-clipboard \
@@ -107,10 +113,15 @@ install_ubuntu_packages() {
         libjpeg-dev libwebp-dev libmagic-dev libgirepository1.0-dev \
         libtomlplusplus-dev libzip-dev librsvg2-dev libre2-dev \
         libxcb1-dev libxcb-composite0-dev libxcb-ewmh-dev libxcb-icccm4-dev \
-        libxcb-res0-dev libxcb-xinput-dev libxcb-errors-dev \
+        libxcb-res0-dev libxcb-xinput-dev \
         hwdata glslang-tools
 
+    # libxcb-errors isn't packaged on Noble; build it first so Hyprland's
+    # cmake finds it via pkg-config.
+    build_libxcb_errors_from_source
+
     build_hyprland_from_source
+    build_xdph_from_source
     build_missing_ubuntu_tools
 }
 
@@ -129,6 +140,26 @@ clone_or_update() {
     fi
 }
 
+build_libxcb_errors_from_source() {
+    if pkg-config --exists xcb-errors 2>/dev/null; then
+        log "libxcb-errors already installed — skipping"
+        return
+    fi
+    log "Building libxcb-errors from source (not packaged on Noble)"
+    sudo apt-get install -y autoconf automake libtool xutils-dev xcb-proto python3
+    mkdir -p "$SRC_DIR"
+    clone_or_update "https://gitlab.freedesktop.org/xorg/lib/libxcb-errors.git" \
+        "$SRC_DIR/libxcb-errors"
+    (
+        cd "$SRC_DIR/libxcb-errors"
+        git submodule update --init --recursive
+        ./autogen.sh --prefix=/usr
+        make
+        sudo make install
+        sudo ldconfig
+    )
+}
+
 build_hyprland_from_source() {
     if command -v Hyprland >/dev/null 2>&1; then
         log "Hyprland already installed — skipping source build"
@@ -139,8 +170,41 @@ build_hyprland_from_source() {
     clone_or_update "https://github.com/hyprwm/Hyprland" "$SRC_DIR/Hyprland"
     (
         cd "$SRC_DIR/Hyprland"
+        # main can be mid-refactor; stick to the latest release tag.
+        local latest_tag
+        latest_tag="$(git tag --list 'v*' --sort=-v:refname | head -n1)"
+        if [[ -n "$latest_tag" ]]; then
+            log "Checking out Hyprland $latest_tag"
+            git checkout --quiet "$latest_tag"
+            git submodule update --init --recursive --quiet
+        fi
+        # hyprutils, hyprlang, hyprcursor, hyprwayland-scanner, aquamarine
+        # aren't in apt on 24.04. asneededdeps clones + installs them.
+        if make -n asneededdeps >/dev/null 2>&1; then
+            sudo make asneededdeps
+        else
+            warn "Hyprland Makefile has no 'asneededdeps' target — build will likely fail if hyprutils/hyprlang/aquamarine aren't present"
+        fi
         make all
         sudo make install
+    )
+}
+
+build_xdph_from_source() {
+    if command -v xdg-desktop-portal-hyprland >/dev/null 2>&1; then return; fi
+    log "Building xdg-desktop-portal-hyprland from source"
+    sudo apt-get install -y libpipewire-0.3-dev libsdbus-c++-dev \
+        qt6-base-dev qt6-wayland-dev || true
+    clone_or_update "https://github.com/hyprwm/xdg-desktop-portal-hyprland" \
+        "$SRC_DIR/xdg-desktop-portal-hyprland"
+    (
+        cd "$SRC_DIR/xdg-desktop-portal-hyprland"
+        local latest_tag
+        latest_tag="$(git tag --list 'v*' --sort=-v:refname | head -n1)"
+        [[ -n "$latest_tag" ]] && git checkout --quiet "$latest_tag"
+        cmake -B build -S . -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release
+        cmake --build build
+        sudo cmake --install build
     )
 }
 
