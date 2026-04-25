@@ -125,7 +125,7 @@ install_fedora_packages() {
     log "Installing Hyprland + ecosystem via dnf"
     sudo dnf install -y \
         hyprland hyprpaper hypridle hyprlock hyprpicker xdg-desktop-portal-hyprland \
-        waybar kitty rofi-wayland btop \
+        waybar kitty alacritty rofi-wayland btop \
         swww swaync \
         nwg-panel nwg-look \
         dolphin ristretto \
@@ -136,6 +136,19 @@ install_fedora_packages() {
         zsh git curl unzip \
         jetbrains-mono-fonts-all google-noto-emoji-fonts \
         qt5-qtwayland qt6-qtwayland
+}
+
+install_brave() {
+    if rpm -q brave-browser >/dev/null 2>&1; then
+        log "Brave already installed"
+        return
+    fi
+    log "Adding Brave repo and installing brave-browser"
+    if [[ ! -f /etc/yum.repos.d/brave-browser.repo ]]; then
+        sudo dnf config-manager addrepo \
+            --from-repofile=https://brave-browser-rpm-release.s3.brave.com/brave-browser.repo
+    fi
+    sudo dnf install -y brave-browser
 }
 
 # ---------------------------------------------------------------------------
@@ -220,6 +233,7 @@ main() {
     require_fedora
     install_broadcom_wifi
     install_fedora_packages
+    install_brave
     install_oh_my_zsh
     install_nerd_font
     link_configs
