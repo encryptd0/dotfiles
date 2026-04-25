@@ -131,7 +131,7 @@ install_fedora_packages() {
         dolphin ristretto \
         pipewire wireplumber pipewire-pulseaudio pavucontrol \
         brightnessctl playerctl \
-        polkit-gnome network-manager-applet \
+        hyprpolkitagent network-manager-applet \
         grim slurp wl-clipboard cliphist \
         zsh git curl unzip \
         jetbrains-mono-fonts-all google-noto-emoji-fonts \
