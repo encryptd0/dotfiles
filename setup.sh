@@ -120,8 +120,12 @@ install_fedora_packages() {
     sudo dnf install -y dnf-plugins-core
     sudo dnf copr enable -y solopasha/hyprland
 
+    log "Refreshing base system before adding Hyprland stack"
+    sudo dnf upgrade -y --refresh --skip-broken --skip-unavailable \
+        || warn "dnf upgrade had issues — continuing anyway"
+
     log "Installing Hyprland + ecosystem via dnf"
-    sudo dnf install -y \
+    sudo dnf install -y --skip-broken --skip-unavailable \
         hyprland hyprpaper hypridle hyprlock hyprpicker xdg-desktop-portal-hyprland \
         waybar kitty alacritty rofi-wayland btop \
         swww swaync \
