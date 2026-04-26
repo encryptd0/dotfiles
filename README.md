@@ -14,15 +14,54 @@
 | ✨ Prompt Theme | Powerlevel10k |
 | 🔤 Font | JetBrains Mono (Nerd Fonts) |
 
+## Install (one-liner)
+
+On a fresh Fedora Workstation install with internet connectivity:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/encryptd0/dotfiles/main/install.sh | bash
+```
+
+That's it. The bootstrap clones this repo into `~/Documents/dotfiles`
+and runs `setup.sh`. After it finishes, log out and pick **Hyprland**
+from the display manager's session list.
+
+### Prefer to inspect first
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/encryptd0/dotfiles/main/install.sh -o install.sh
+less install.sh
+bash install.sh
+```
+
+### Manual clone
+
+```sh
+sudo dnf install -y git
+git clone https://github.com/encryptd0/dotfiles.git ~/Documents/dotfiles
+cd ~/Documents/dotfiles
+./setup.sh
+```
+
+## Requirements
+
+- Fedora Workstation (any recent release).
+- **Internet connection.** Hyprland and the rest of the desktop come
+  from online repos, so connectivity is required on every machine —
+  including MacBooks where the wifi driver itself is fetched online.
+
 ## What `setup.sh` does
 
 - Verifies you're on Fedora (bails if not).
-- Detects Broadcom BCM43xx wifi. On a MacBook Air A1466, installs the
-  bundled offline `wl` driver RPMs from `wifi/rpms/` so wifi works
-  before the online package install runs. On a PC this step is skipped.
+- Detects Broadcom BCM43xx wifi. On a MacBook Air A1466 (and similar
+  Macs from that era), installs `akmod-wl` + `broadcom-wl` from RPM
+  Fusion so wifi works going forward. On any other device this step
+  is skipped. If the install fails for any reason, the script logs a
+  warning and continues — it never aborts the whole run over wifi.
 - Enables RPM Fusion (free + nonfree) and the `solopasha/hyprland` COPR.
-- Installs Hyprland, Waybar, Kitty, Rofi (Wayland), btop, swww, swaync,
-  nwg-panel, nwg-look, PipeWire, pavucontrol, and the rest via `dnf`.
+- Installs Hyprland, Waybar, Kitty, Alacritty, Rofi (Wayland), btop,
+  swww, swaync, nwg-panel, nwg-look, PipeWire, pavucontrol, Brave, and
+  the rest via `dnf`.
 - Installs Oh My Zsh + Powerlevel10k, sets zsh as the default shell.
 - Installs the JetBrains Mono Nerd Font if missing.
 - Symlinks `hypr/`, `waybar/`, `kitty/`, `rofi/`, `btop/`, `nwg-panel/`,
@@ -30,62 +69,31 @@
   are backed up to `~/.config/<name>.bak.<timestamp>` before linking,
   so rerunning is safe.
 
-## Install on a PC (has working wifi or ethernet)
+## MacBook Air A1466 (and similar BCM4360 machines)
 
-1. Install Fedora Workstation and connect to the network.
-2. Clone and run:
-   ```sh
-   git clone <this-repo> ~/Documents/dotfiles
-   cd ~/Documents/dotfiles
-   ./setup.sh
-   ```
-3. Log out and pick **Hyprland** from the display manager's session list.
-4. On the first zsh launch, follow the Powerlevel10k wizard.
+The Broadcom BCM4360 wifi chip needs the proprietary `wl` driver, and
+a fresh Fedora install has no wifi until that driver is installed.
+`setup.sh` installs it automatically when it detects the chip — but it
+needs internet to do that, so bring connectivity another way for the
+first run:
 
-No Broadcom BCM43xx chip is detected, so the wifi step is skipped
-automatically — the bundled RPMs cost nothing on a PC.
+- **Wired ethernet** via a USB-C/USB-A adapter (simplest).
+- **USB tethering** from a phone.
+- **Phone hotspot** picked up by another wifi-capable device sharing
+  over USB or ethernet.
 
-## Install on a MacBook Air A1466 (offline wifi)
+Once `setup.sh` finishes, wifi is up on the MacBook and you can use it
+normally on subsequent reboots.
 
-The BCM4360 wifi chip needs the proprietary `wl` driver, and a fresh
-Fedora install has no wifi until it's installed. The driver RPMs are
-bundled in `wifi/rpms/` so the first boot works without internet.
+### `wifi/` — optional offline tooling
 
-### One-time, on any Fedora machine with internet
-
-Populate `wifi/rpms/` and push to GitHub:
-
-```sh
-cd ~/Documents/dotfiles
-./wifi/download-drivers.sh
-git add wifi/rpms
-git commit -m "refresh wifi drivers for Fedora $(rpm -E %fedora)"
-git push
-```
-
-Run this whenever you move to a new Fedora release. See
-[`wifi/README.md`](wifi/README.md) for why `kernel-devel` matters.
-
-### On the MacBook, fresh install
-
-1. Install Fedora Workstation from USB. **Do not update packages yet.**
-2. Without connecting to wifi, copy this repo onto the machine (USB
-   stick is easiest — `git clone` it somewhere with internet first,
-   then copy the whole directory).
-3. Run the setup:
-   ```sh
-   cd ~/Documents/dotfiles
-   ./setup.sh
-   ```
-   The script detects the Broadcom chip, installs the bundled driver
-   RPMs offline, rebuilds the kmod against the running kernel, and
-   `modprobe wl`s.
-4. If the script stops after the wifi step (modprobe failed or a
-   reboot is needed): reboot, connect to wifi via the GNOME network
-   icon, then re-run `./setup.sh`. It skips everything already done
-   and continues with the package install.
-5. Log out and pick **Hyprland** from the display manager's session list.
-6. On the first zsh launch, follow the Powerlevel10k wizard.
+The `wifi/` directory contains a `download-drivers.sh` script that
+pre-downloads the `wl` driver RPMs for air-gapped or repeat-install
+scenarios. **It is not used by `setup.sh` anymore** — pinned RPMs can
+conflict with whatever kernel-devel happens to be installed on the
+target machine, which used to break the whole script. If you want the
+truly offline path, see [`wifi/README.md`](wifi/README.md) and install
+those RPMs manually before running `setup.sh`.
 
 ## Screenshots
 ![Project Screenshot](images/screenshot_1768586722.png)

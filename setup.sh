@@ -13,7 +13,6 @@ set -euo pipefail
 DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
 BACKUP_SUFFIX=".bak.$(date +%Y%m%d-%H%M%S)"
-WIFI_RPMS_DIR="$DOTFILES_DIR/wifi/rpms"
 
 # Config directories in this repo that should be symlinked into ~/.config.
 CONFIG_DIRS=(hypr waybar kitty rofi btop nwg-panel nwg-look ristretto)
@@ -75,25 +74,25 @@ enable_rpmfusion() {
 install_broadcom_wifi() {
     if ! has_broadcom_bcm43; then
         log "Broadcom BCM43xx wifi not detected — skipping wl driver install"
-        return
+        return 0
     fi
     if wl_loaded; then
         log "wl kernel module already loaded — skipping"
-        return
+        return 0
+    fi
+    if ! has_network; then
+        warn "Broadcom BCM43xx detected but no network — cannot install wl driver."
+        warn "Connect via ethernet/USB tether/hotspot and re-run ./setup.sh."
+        warn "(For air-gapped installs, see wifi/README.md.)"
+        return 0
     fi
 
-    if has_network; then
-        log "Broadcom BCM43xx detected and online — installing wl driver via dnf"
-        enable_rpmfusion
-        sudo dnf install -y akmod-wl broadcom-wl
-    else
-        if [[ ! -d "$WIFI_RPMS_DIR" ]] || ! compgen -G "$WIFI_RPMS_DIR/*.rpm" >/dev/null; then
-            err "Broadcom BCM43xx detected and no network, but no RPMs at $WIFI_RPMS_DIR"
-            err "Run wifi/download-drivers.sh on a Fedora machine with internet, commit the result, then re-run."
-            exit 1
-        fi
-        log "Installing bundled Broadcom wl driver RPMs (offline)"
-        sudo dnf install -y --disablerepo='*' "$WIFI_RPMS_DIR"/*.rpm
+    log "Broadcom BCM43xx detected and online — installing wl driver via dnf"
+    enable_rpmfusion
+    if ! sudo dnf install -y akmod-wl broadcom-wl; then
+        warn "wl driver install failed — continuing without it. Fix manually with:"
+        warn "  sudo dnf install akmod-wl broadcom-wl && sudo akmods --force && sudo modprobe wl"
+        return 0
     fi
 
     log "Building wl kernel module for running kernel (akmods)"
@@ -103,8 +102,7 @@ install_broadcom_wifi() {
     if sudo modprobe wl; then
         log "wl loaded — you can now connect to wifi"
     else
-        warn "modprobe wl failed. Reboot, connect to wifi via GNOME/nmcli, then re-run ./setup.sh to continue."
-        exit 0
+        warn "modprobe wl failed. Reboot, then re-run ./setup.sh if wifi is still missing."
     fi
 }
 
